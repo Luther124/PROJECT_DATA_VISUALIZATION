@@ -1,0 +1,140 @@
+---
+output:
+  pdf_document:
+    latex_engine: pdflatex
+    number_sections: true
+    toc: false
+fontsize: 12pt
+geometry: margin=2.5cm
+header-includes:
+  - \usepackage[T1]{fontenc}
+  - \usepackage{mathptmx}
+  - \usepackage{float}
+  - \floatplacement{figure}{H}
+  - \renewcommand{\figurename}{Graphique}
+  - \renewcommand{\tablename}{Tableau}
+  - \renewcommand{\contentsname}{Sommaire}
+---
+
+<!--
+=======================================================================
+ GABARIT PDF DU RAPPORT : compilé par exporter_pdf() (R/export_pdf.R)
+-----------------------------------------------------------------------
+ Ce fichier n'est pas lancé à la main : exporter_pdf() le copie dans un
+ dossier temporaire puis appelle rmarkdown::render() en lui transmettant
+ quatre objets :
+   r            : contenu du rapport (résultat de preparer_rapport())
+   commentaires : commentaires d'analyse, par section
+   sections     : codes des sections à inclure
+   infos        : titre, sous-titre, auteur, logos
+ Police : mathptmx = police Times pour LaTeX (équivalent Times New Roman).
+ Graphiques : ggplot2, enregistrés en PNG puis insérés avec leur légende.
+=======================================================================
+-->
+
+```{r reglages, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+f <- r$filtres
+
+# Caractères absents des polices LaTeX de base -> équivalents sûrs
+propre <- function(x) {
+  x <- gsub("≥", "$\\\\geq$", x)    # supérieur ou égal
+  x <- gsub("×", "$\\\\times$", x)  # signe multiplié
+  x
+}
+
+# Affiche un tableau avec sa légende (tableau Markdown « pipe »)
+afficher_tableau <- function(d, titre) {
+  d[] <- lapply(d, function(col) propre(as.character(col)))
+  names(d) <- propre(names(d))
+  cat("\n\n")
+  print(knitr::kable(d, format = "pipe", caption = propre(titre),
+                     align = c("l", rep("r", ncol(d) - 1))))
+  cat("\n\n")
+}
+```
+
+::: {.center data-latex=""}
+
+```{r logos, results='asis'}
+logos <- basename(c(infos$logo_minfi, infos$logo_issea))
+logos <- logos[file.exists(logos)]
+if (length(logos) > 0) cat(paste0("![](", logos, "){height=2.8cm}", collapse = " \\hspace{1.5cm} "), "\n")
+```
+
+**Ministère des Finances - Division de la Prévision**
+
+**Institut Sous-régional de Statistique et d’Économie Appliquée**
+
+\vspace{2.5cm}
+
+\LARGE
+
+**`r infos$titre`**
+
+\Large
+
+*`r infos$sous_titre`*
+
+\vspace{1.5cm}
+
+\large
+
+**Rédigé par : `r infos$auteur`**
+
+\normalsize
+
+Document généré le `r format(Sys.Date(), "%d/%m/%Y")`
+
+\vspace{1cm}
+
+:::
+
+```{r parametres, results='asis'}
+afficher_tableau(resume_filtres(f), "Paramètres de l'édition")
+```
+
+\newpage
+\tableofcontents
+\newpage
+
+# Introduction
+
+```{r introduction, results='asis'}
+cat(propre(texte_introduction()), sep = "\n\n")
+```
+
+```{r sections, results='asis'}
+# Boucle sur les sections choisies : titre, chiffres clés, graphiques,
+# tableaux détaillés puis commentaire d'analyse.
+for (code in intersect(names(r$sections), sections)) {
+  sec <- r$sections[[code]]
+
+  cat("\n\n\\newpage\n\n# ", propre(sec$titre), "\n\n*", propre(sec$sous_titre), "*\n\n", sep = "")
+  afficher_tableau(sec$kpi, paste0("Chiffres clés de la section ", sec$titre))
+
+  # Graphiques : enregistrement en PNG puis insertion avec légende numérotée
+  for (sp in Filter(Negate(is.null), sec$graphiques)) {
+    image <- tempfile("graphique_", tmpdir = ".", fileext = ".png")
+    ggplot2::ggsave(image, spec_vers_ggplot(sp), width = 6.3, height = hauteur_graphique(sp), dpi = 200)
+    cat("\n\n![", propre(sp$titre), "](", basename(image), "){width=100%}\n\n", sep = "")
+    cat("\\begin{center}\\footnotesize\\textit{", infos$source, "}\\end{center}\n\n", sep = "")
+  }
+
+  for (tb in sec$tableaux) afficher_tableau(tb$data, tb$titre)
+
+  com <- commentaires[[code]]
+  if (!is.null(com)) {
+    cat("\n\n## Commentaire d'analyse\n\n", propre(com$texte), "\n\n", sep = "")
+    cat("*", mention_source(com), "*\n\n", sep = "")
+  }
+}
+```
+
+\newpage
+
+# Note méthodologique
+
+```{r methode, results='asis'}
+cat(paste0("- ", propre(texte_methode())), sep = "\n")
+```

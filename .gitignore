@@ -1,0 +1,14 @@
+# Clé de l'API Gemini : ne jamais la publier
+.Renviron
+
+# Fichiers propres à RStudio
+.Rhistory
+.RData
+.Rproj.user/
+
+# Informations de déploiement (compte Posit)
+rsconnect/
+
+# Packages R compilés pour Windows : trop lourds pour GitHub
+# (ils sont réinstallés avec 00_installer_packages.R)
+packages/

@@ -1,0 +1,1503 @@
+---
+title: "Recettes fiscales · TABORD"
+output:
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: scroll
+    theme:
+      version: 4
+      bootswatch: flatly
+      primary: "#2A7FD4"
+      base_font: "Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+    mathjax: null
+    navbar:
+      - { title: "MINFI / DP", icon: "fa-landmark", align: right }
+runtime: shiny
+---
+
+<!--
+=======================================================================
+ app.Rmd : DASHBOARD FLEXDASHBOARD (runtime: shiny)
+ SUIVI CONJONCTUREL DES RECETTES FISCALES : TABORD (tableau M-7)
+ MINFI / Division de la Prévision : Projet de Data Visualisation, ISSEA
+-----------------------------------------------------------------------
+ CONTENU DU PROJET
+   app.Rmd                    ce fichier : interface + serveur
+   R/fonctions.R              lecture de la base, variables X, Y, Z, TCAM...
+   R/donnees_rapport.R        calculs communs + contenu du rapport
+   R/commentaires_ia.R        commentaires rédigés par IA (Gemini, ellmer)
+   R/exports_office.R         exports Word / PowerPoint (officer + mschart)
+   R/export_pdf.R             export PDF (ggplot2 + gabarit R Markdown)
+   rapports/rapport_pdf.Rmd   gabarit du PDF
+   data/Base_TABORD_harmonisee_2018_2025.xlsx   base de données
+   .Renviron                  clé API de l'IA (voir R/commentaires_ia.R)
+
+ LANCER LE TABLEAU DE BORD
+   1. Une seule fois : exécuter 00_installer_packages.R
+   2. Ouvrir app.Rmd dans RStudio puis cliquer sur « Run Document »
+      (ou en console : rmarkdown::run("app.Rmd"))
+
+ DÉPLOYER EN LIGNE : voir GUIDE_DEPLOIEMENT.txt et deployer.R
+
+ RAPPEL SUR LE « PIPE » %>% :
+   x %>% f() %>% g()  se lit  « prendre x, PUIS appliquer f, PUIS g ».
+=======================================================================
+-->
+
+```{r global, include=FALSE}
+# -----------------------------------------------------------------------
+# RÔLE DU CHUNK « global » : charger les packages, les fonctions et les
+# données. Dans un flexdashboard « runtime: shiny », le chunk nommé
+# « global » est exécuté UNE SEULE FOIS au démarrage de l'application,
+# puis partagé par tous les visiteurs : la base Excel n'est donc pas
+# relue à chaque connexion.
+# -----------------------------------------------------------------------
+
+# 0. Packages fournis avec le projet ---------------------------------------
+#    Si le dossier « packages » est présent, R y cherche d'abord les packages.
+#    Il n'y a alors rien à installer ni à télécharger.
+if (dir.exists("packages")) .libPaths(c(normalizePath("packages"), .libPaths()))
+
+# 1. Packages ------------------------------------------------------------
+library(flexdashboard)   # mise en page du tableau de bord (pages, lignes, valueBox)
+library(shiny)           # interactivité (menus déroulants, boutons)
+library(readxl)          # lecture de la base Excel
+library(dplyr)           # manipulation des données (filter, mutate, summarise...)
+library(tidyr)           # mise en forme longue / large (pivot_longer, pivot_wider)
+library(plotly)          # graphiques interactifs du dashboard
+library(DT)              # tableaux interactifs
+library(openxlsx)        # export Excel de synthèse
+library(ggplot2)         # graphiques du rapport PDF
+library(scales)          # format des nombres sur les axes (PDF)
+library(officer)         # création des fichiers Word et PowerPoint
+library(mschart)         # graphiques Microsoft natifs (modifiables dans Office)
+library(flextable)       # tableaux mis en forme pour Word et PowerPoint
+library(rmarkdown)       # compilation du gabarit PDF
+library(knitr)           # tableaux du gabarit PDF
+library(png)             # lecture du logo PNG (PDF sans LaTeX)
+library(jpeg)            # lecture du logo JPEG (PDF sans LaTeX)
+library(ellmer)          # appel de l'IA (Gemini) pour les commentaires
+
+# 2. Clé API de l'IA : lue dans le fichier .Renviron placé à côté de app.Rmd
+#    (voir le mode d'emploi en tête de R/commentaires_ia.R)
+if (file.exists(".Renviron")) readRenviron(".Renviron")
+
+# 3. Fonctions du projet ---------------------------------------------------
+source("R/fonctions.R",        encoding = "UTF-8")  # base, variables X/Y/Z, contributions, TCAM
+source("R/donnees_rapport.R",  encoding = "UTF-8")  # palette, calculs, contenu du rapport
+source("R/commentaires_ia.R",  encoding = "UTF-8")  # commentaires IA + secours par règles
+source("R/exports_office.R",   encoding = "UTF-8")  # Word et PowerPoint (graphiques natifs)
+source("R/export_pdf.R",       encoding = "UTF-8")  # PDF
+
+# 4. Lecture de la base harmonisée (seule source de données) -------------
+FICHIER <- "data/Base_TABORD_harmonisee_2018_2025.xlsx"
+B  <- charger_base(FICHIER)   # liste : ref, real, bud, tot
+AN <- annuel_variables(B)     # une ligne par année   : Z, X, X1...X7, Y, Y1...Y6
+MO <- mensuel_variables(B)    # une ligne par mois    : mêmes variables
+BU <- budget_variables(B)     # prévisions LF / LFR   : mêmes variables
+
+# 5. Repères de temps -----------------------------------------------------
+ANNEES <- B$real %>% distinct(annee) %>% arrange(annee) %>% pull(annee)
+
+DERNIER_MOIS <- B$real %>%                 # dernier mois disponible
+  filter(annee == max(annee)) %>%          # ... de la dernière année
+  summarise(m = max(mois)) %>%
+  pull(m)
+# (MOIS_LIB « Janv., Févr. ... » vient de R/fonctions.R ;
+#  MOIS_LONG « Janvier, Février ... » vient de R/donnees_rapport.R)
+```
+
+```{r palette-et-outils, include=FALSE}
+# -----------------------------------------------------------------------
+# RÔLE DU CHUNK : définir la palette de couleurs et de petites fonctions
+#                 « outils » réutilisées par tous les graphiques/tableaux.
+# -----------------------------------------------------------------------
+
+# 1. Palette de couleurs ----------------------------------------------------
+#    La palette COUL (navy, dgi, dgd, gris, vert, orange, rouge) et les
+#    fonctions statut_tr() / statut_variation() sont définies dans
+#    R/donnees_rapport.R : elles servent aussi aux exports.
+# Versions plus foncées pour les valueBoxes (texte blanc bien lisible)
+COUL_BOX <- c(navy = "#2A7FD4", bleu = "#3E95E6", vert = "#2E9E4F",
+              orange = "#F0913A", rouge = "#E0473F", gris = "#7B8794")
+
+# 4. Affichage d'une valeur manquante -------------------------------------
+ou_tiret <- function(x, texte) if (is.na(x)) "n.d." else texte
+
+# 5. Style commun à tous les graphiques Plotly ------------------------------
+#    (police, grille discrète, légende en bas, séparateur décimal « , »)
+style_tabord <- function(p, titre_y = "Milliards de FCFA") {
+  p %>%
+    layout(
+      separators    = ", ",                       # 1 234,5 (format français)
+      font          = list(family = "Segoe UI, Roboto, Arial", size = 12, color = "#1F2933"),
+      paper_bgcolor = "rgba(0,0,0,0)",
+      plot_bgcolor  = "rgba(0,0,0,0)",
+      xaxis  = list(title = "", showgrid = FALSE, zeroline = FALSE),
+      yaxis  = list(title = titre_y, gridcolor = "#E4E9F0", zerolinecolor = "#9AA5B1",
+                    tickformat = ",~f"),            # 4 000 et non 4000
+      legend = list(orientation = "h", x = 0, y = -0.18),
+      hoverlabel = list(bgcolor = "white", bordercolor = "#CBD2D9", font = list(size = 12)),
+      margin = list(l = 60, r = 20, t = 20, b = 40)
+    ) %>%
+    config(displaylogo = FALSE,
+           modeBarButtonsToRemove = c("lasso2d", "select2d", "autoScale2d"))
+}
+
+# 6. Traduction française des tableaux DT ---------------------------------
+DT_FR <- list(
+  decimal = ",", thousands = " ",
+  search = "Rechercher :", lengthMenu = "Afficher _MENU_ lignes",
+  info = "Lignes _START_ à _END_ sur _TOTAL_", infoEmpty = "Aucune ligne",
+  infoFiltered = "(filtrées sur _MAX_ lignes)", zeroRecords = "Aucun résultat",
+  paginate = list(first = "Premier", last = "Dernier",
+                  `next` = "Suivant", previous = "Précédent"),
+  buttons = list(copy = "Copier", excel = "Excel", csv = "CSV", pdf = "PDF")
+)
+
+# 7. Tableau DT standard (boutons Copier / Excel / PDF) ---------------------
+#    - les colonnes décimales sont affichées au format français (1 234,5) ;
+#    - « decimales » fixe le nombre de chiffres après la virgule ;
+#    - « speciales » permet un nombre différent pour certaines colonnes,
+#      ex. speciales = c(`Contribution (pts)` = 2).
+tableau_dt <- function(d, lignes = 15, filtre = "none", dom = "Bt",
+                       decimales = 1, speciales = c()) {
+  tableau <- datatable(d,
+                       rownames   = FALSE,
+                       filter     = filtre,
+                       extensions = "Buttons",
+                       class      = "compact stripe hover",
+                       options    = list(dom = dom, pageLength = lignes, scrollX = TRUE,
+                                         buttons = c("copy", "excel", "pdf"),
+                                         language = DT_FR))
+
+  colonnes_decimales <- d %>% select(where(is.double)) %>% names()
+  for (colonne in colonnes_decimales) {
+    chiffres <- if (colonne %in% names(speciales)) speciales[[colonne]] else decimales
+    tableau  <- tableau %>%
+      formatRound(colonne, digits = chiffres, mark = " ", dec.mark = ",")
+  }
+  tableau
+}
+
+# 8. Encart « Commentaire d'analyse (IA) » placé en bas de chaque page -------
+#    section : "vue", "structure", "budget" ou "choc".
+#    Le bouton porte l'identifiant ia_<section> ; le texte est affiché par
+#    la sortie txt_ia_<section>, définie dans le chunk « ia-et-exports ».
+encart_ia <- function(section) {
+  div(class = "ia-encart",
+      actionButton(paste0("ia_", section), "Générer / actualiser l'analyse",
+                   icon = icon("wand-magic-sparkles"), class = "btn-ia"),
+      uiOutput(paste0("txt_ia_", section)))
+}
+
+# 9. Bouton de téléchargement du rapport (Word, PDF ou PowerPoint) ----------
+#    Dans un document R Markdown interactif, downloadHandler() crée à la fois
+#    le bouton et le fichier. lancer_export() est définie dans « ia-et-exports ».
+EXTENSIONS <- c(word = "docx", pdf = "pdf", pptx = "pptx")
+bouton_rapport <- function(format, libelle, classe) {
+  downloadHandler(
+    filename   = function() paste0("Rapport_TABORD_", input$annee, "_M", input$mois, ".",
+                                   EXTENSIONS[[format]]),
+    content    = function(file) lancer_export(file, format),
+    outputArgs = list(label = libelle, class = classe)
+  )
+}
+
+# 10. Liste des rubriques pour le menu déroulant, classées par famille ------
+RUBRIQUES <- B$ref %>%
+  filter(type != "pour_memoire") %>%                   # hors recettes totales
+  mutate(
+    famille = case_when(
+      code %in% c("RTD", "RT", "RP", "RNP", "RF") ~ "1. Agrégats",
+      startsWith(code, "RF_X") | startsWith(code, "X_") ~ "2. Impôts et taxes (DGI)",
+      startsWith(code, "RF_Y") | startsWith(code, "Y_") ~ "3. Recettes douanières (DGD)",
+      TRUE ~ "4. Autres recettes"),
+    etiquette = paste0(libelle_standard, " [", code, "]")
+  )
+
+CHOIX_RUBRIQUES <- RUBRIQUES %>%
+  arrange(famille) %>%
+  { split(setNames(.$code, .$etiquette), .$famille) }  # liste groupée par famille
+```
+
+```{css}
+/* -----------------------------------------------------------------------
+   RÔLE DU CHUNK : habillage visuel (couleurs, arrondis, ombres).
+   Aucune incidence sur les calculs.
+   ----------------------------------------------------------------------- */
+body { background-color: #F4F8FC; }
+
+/* Barre de navigation : dégradé bleu institutionnel */
+.navbar, .navbar-inverse {
+  background: linear-gradient(90deg, #2A7FD4 0%, #4A9BE8 100%) !important;
+  border: none !important;
+}
+.navbar .navbar-brand { font-weight: 600; letter-spacing: .3px; }
+.navbar .nav-link, .navbar-nav > li > a { color: #FFFFFF !important; }
+.navbar .nav-item.active .nav-link,
+.navbar .nav-link:hover { background-color: rgba(255,255,255,.15) !important; border-radius: 6px; }
+
+/* Ruban latéral */
+.section.sidebar {
+  background-color: #E4EEF8 !important;
+  color: #1F2933;
+  border-right: 1px solid #D3E0EE;
+  border-right: none;
+  padding: 14px 16px;
+}
+.section.sidebar label, .section.sidebar .control-label { color: #1F2933; font-weight: 600; font-size: 13px; margin-bottom: 3px; }
+.section.sidebar .form-group { margin-bottom: 10px; }
+.section.sidebar .help { color: #5F6B7A; font-size: 12px; line-height: 1.4; }
+.section.sidebar hr { border-top: 1px solid #C9D8E8; margin: 12px 0; }
+.section.sidebar h5 { color: #2A7FD4; text-transform: uppercase; font-size: 11.5px;
+                      letter-spacing: 1px; margin: 4px 0 8px 0; font-weight: 700; }
+.logo-box { background: #FFFFFF; border-radius: 10px; box-shadow: 0 1px 4px rgba(42,127,212,.15); padding: 8px; text-align: center; margin-bottom: 10px; }
+.logo-box img { max-width: 46%; max-height: 95px; margin: 0 2%; }
+.sidebar-sub { text-align: center; font-size: 12px; color: #5F6B7A; margin-bottom: 4px; }
+.section.sidebar .btn { width: 100%; margin-top: 6px; border-radius: 6px; font-weight: 600; }
+.btn-export { background-color: #2E9E4F !important; border-color: #2E9E4F !important; color: #fff !important; }
+.btn-reset  { background-color: #FFFFFF !important; border: 1px solid #2A7FD4 !important; color: #2A7FD4 !important; }
+.irs--shiny .irs-bar { background: #4A9BE8; border-color: #4A9BE8; }
+.irs--shiny .irs-single, .irs--shiny .irs-from, .irs--shiny .irs-to { background-color: #2A7FD4; }
+.irs--shiny .irs-min, .irs--shiny .irs-max, .irs--shiny .irs-grid-text { color: #5F6B7A; }
+
+/* Cartes des graphiques */
+.chart-wrapper {
+  background: #FFFFFF;
+  border: none !important;
+  border-radius: 10px !important;
+  box-shadow: 0 2px 8px rgba(42,127,212,.10);
+}
+.chart-title {
+  color: #FFFFFF !important; font-weight: 600; font-size: 14px;
+  background: linear-gradient(90deg, #3E8FDE 0%, #6AB0F0 100%) !important;
+  border: none !important; border-left: 5px solid #F7B538 !important;
+  border-radius: 10px 10px 0 0; padding: 8px 12px !important;
+}
+.chart-notes { color: #5F6B7A; font-size: 12px; background: #F7F9FC; }
+
+/* valueBoxes */
+.value-box { border-radius: 10px !important; box-shadow: 0 2px 8px rgba(42,127,212,.15); }
+.value-box .value { font-size: 28px; font-weight: 700; }
+.value-box .caption { font-size: 13px; opacity: .95; }
+
+/* Tableaux DT */
+table.dataTable thead th { background-color: #3E8FDE; color: #FFFFFF; font-weight: 600; }
+.dt-buttons { margin-bottom: 6px; }
+.dt-buttons .btn, .dt-buttons .dt-button {
+  font-size: 12px !important; margin-right: 4px; padding: 3px 12px;
+  background: #EEF2F7 !important; color: #0B3C5D !important;
+  border: 1px solid #CBD2D9 !important; border-radius: 6px !important;
+}
+.dt-buttons .btn:hover { background: #DCE6F0 !important; }
+.pagination .page-link { color: #0B3C5D; background-color: #FFFFFF; border-color: #DDE3EA; }
+.pagination .page-item.active .page-link { background-color: #2A7FD4; border-color: #2A7FD4; color: #FFFFFF; }
+.pagination .page-item.disabled .page-link { color: #9AA5B1; background-color: #FFFFFF; }
+
+/* Ruban latéral : barre de défilement si l'écran est trop petit */
+.section.sidebar { overflow-y: auto; }
+
+/* Encarts de commentaire IA */
+.ia-encart { padding: 4px 6px; width: 100%; }
+.btn-ia { background-color: #2A7FD4 !important; border-color: #2A7FD4 !important; color: #fff !important;
+          border-radius: 6px; font-weight: 600; font-size: 13px; margin-bottom: 8px; }
+.ia-texte { text-align: justify; font-size: 14px; line-height: 1.55; color: #1F2933; margin-bottom: 6px; }
+.ia-source { font-size: 12px; color: #5F6B7A; font-style: italic; margin-bottom: 2px; }
+.ia-note { font-size: 12px; color: #B9650A; }
+.ia-vide { font-size: 13px; color: #5F6B7A; font-style: italic; }
+.ia-perime { font-size: 12.5px; color: #C5221F; background: #FCE8E6; border-radius: 6px;
+             padding: 4px 8px; margin-bottom: 6px; display: inline-block; }
+/* Boutons d'export du rapport */
+.btn-stage { background-color: #F7B538 !important; border-color: #F7B538 !important; color: #1F2933 !important; }
+.btn-word { background-color: #2A7FD4 !important; border-color: #2A7FD4 !important; color: #fff !important; }
+.btn-pdf  { background-color: #E0473F !important; border-color: #E0473F !important; color: #fff !important; }
+.btn-pptx { background-color: #F0913A !important; border-color: #F0913A !important; color: #fff !important; }
+.zone-export .btn { min-width: 260px; margin: 4px 8px 4px 0; border-radius: 6px; font-weight: 600; }
+.zone-export p { font-size: 13px; color: #3E4C59; margin: 6px 0; }
+/* Contenu des cartes : défilement plutôt que débordement sur les cartes voisines */
+.chart-stage-flex { overflow-y: auto !important; overflow-x: hidden; }
+.chart-shim { overflow-y: auto; }
+.etat-ia { font-size: 13px; padding: 6px 10px; border-radius: 6px; display: inline-block; margin-top: 6px; }
+.etat-ia.ok { background: #E6F4EA; color: #1E7B34; } .etat-ia.ko { background: #FEF3E2; color: #B9650A; }
+
+/* Encart d'identité de l'auteur, en bas du ruban latéral */
+.auteur-box { border: 2px solid #2E9E4F; border-radius: 14px; padding: 10px 12px; margin-top: 14px;
+              background: #FFFFFF; color: #7A1F1F; font-weight: 700; font-size: 14px; line-height: 1.6; }
+.auteur-box span { color: #2A7FD4; }
+
+/* Page méthodologique */
+.methodo h4 { color: #2A7FD4; border-left: 4px solid #E08A1E; padding-left: 8px; }
+.methodo code { color: #0B3C5D; background: #EEF2F7; }
+```
+
+
+Filtres {.sidebar data-width=290}
+=======================================================================
+
+```{r sidebar}
+# -----------------------------------------------------------------------
+# RÔLE DU CHUNK : ruban latéral, commun à toutes les pages.
+# Chaque contrôle porte un identifiant (ex. "annee") ; sa valeur est lue
+# ailleurs avec input$annee.
+# -----------------------------------------------------------------------
+
+# 1. Logos du MINFI et de l'ISSEA (intégrés directement dans la page) ------
+logos <- c("logo_MINFI.png", "logo_ISSEA.jpg")
+logos <- logos[file.exists(logos)]
+div(class = "logo-box",
+    if (length(logos) > 0) {
+      lapply(logos, function(l) tags$img(src = knitr::image_uri(l), alt = l))
+    } else {
+      tags$h4(style = "color:#0B3C5D; margin:8px;", "MINFI")
+    })
+p(class = "sidebar-sub", "Division de la Prévision, tableau M-7 du Tableau de bord des finances publiques")
+hr()
+
+# 2. Période de suivi conjoncturel ----------------------------------------
+h5("Période de suivi")
+selectInput("annee", label = tagList(icon("calendar"), "Exercice"),
+            choices = rev(ANNEES), selected = max(ANNEES))
+selectInput("mois", label = tagList(icon("calendar-check"), "Cumul à fin de"),
+            choices = setNames(1:12, MOIS_LONG), selected = DERNIER_MOIS)
+
+# 3. Rubrique du tableau M-7 ----------------------------------------------
+h5("Rubrique analysée")
+selectInput("rubrique", label = tagList(icon("list"), "Rubrique du M-7"),
+            choices = CHOIX_RUBRIQUES, selected = "RF")
+
+# 4. Paramètres d'analyse ---------------------------------------------------
+h5("Paramètres d'analyse")
+sliderInput("seuil", label = tagList(icon("triangle-exclamation"), "Seuil d'alerte du TR (%)"),
+            min = 70, max = 100, value = 90, step = 5, post = " %")
+sliderInput("periode", label = tagList(icon("arrows-left-right"), "Période de décomposition"),
+            min = min(ANNEES), max = max(ANNEES), value = range(ANNEES),
+            step = 1, sep = "")
+selectInput("annee_choc", label = tagList(icon("bolt"), "Année de choc analysée"),
+            choices = ANNEES[-1], selected = 2020)
+hr()
+
+# 5. Boutons d'action -------------------------------------------------------
+# Dans un document R Markdown interactif, le bouton de téléchargement est
+# créé directement par downloadHandler() ; outputArgs fixe son libellé et
+# son style. Le contenu du fichier est préparé par exporter_synthese(),
+# définie dans le chunk « reactifs » ci-dessous.
+downloadHandler(
+  filename   = function() paste0("Synthese_recettes_", input$annee, "_M", input$mois, ".xlsx"),
+  content    = function(file) exporter_synthese(file),
+  outputArgs = list(label = "Exporter la synthèse (Excel)", class = "btn-export")
+)
+actionButton("reinitialiser", "Réinitialiser les filtres", icon = icon("rotate-left"),
+             class = "btn-reset")
+hr()
+
+# 6. Rapport de stage complet (fichier PDF fourni avec l'application)
+h5("Rapport de stage complet")
+downloadHandler(
+  filename   = function() "Rapport_stage_DJAMKENE_MINFI.pdf",
+  content    = function(file) file.copy("rapport_stage_DJAMKENE.pdf", file),
+  outputArgs = list(label = "Télécharger le rapport de stage (PDF)", class = "btn-stage")
+)
+hr()
+
+# 7. Rapport généré à partir des filtres (graphiques Microsoft natifs dans Word et PowerPoint)
+#    Les options (sections, commentaires IA) se règlent dans la page
+#    « Rapport & exports ».
+h5("Rapport généré selon les filtres")
+bouton_rapport("word", "Rapport Word (.docx)", "btn-word")
+bouton_rapport("pptx", "PowerPoint (.pptx)", "btn-pptx")
+bouton_rapport("pdf",  "Rapport PDF (.pdf)", "btn-pdf")
+
+p(class = "help", style = "margin-top:12px;",
+  "Montants en milliards de FCFA. Z = X + Y : recettes fiscales hors IS pétrolier.",
+  "Les lignes « dont » ne sont jamais additionnées à leur parent.")
+
+# 8. Identité de l'auteur et de l'enseignant
+div(class = "auteur-box",
+    div(tags$span("NOM : "), "DJAMKENE SOUGNABE Luther"),
+    div(tags$span("SUP : "), "M. MVONDO MEZANG"),
+    div("ISSEA_AS3 2026"))
+```
+
+```{r reactifs, include=FALSE}
+# -----------------------------------------------------------------------
+# RÔLE DU CHUNK : objets « réactifs », recalculés automatiquement dès
+# qu'un filtre du ruban change. Ils sont ensuite utilisés par les pages.
+# Un reactive() s'appelle comme une fonction : an_sel(), serie()...
+# Les calculs eux-mêmes sont dans R/donnees_rapport.R (fonctions calc_*),
+# ce qui garantit que l'écran et les exports donnent les mêmes chiffres.
+# -----------------------------------------------------------------------
+
+# 1. Valeurs des filtres, converties en nombres entiers ---------------------
+an_sel   <- reactive(as.integer(input$annee))
+mois_sel <- reactive(as.integer(input$mois))
+a0       <- reactive(as.integer(input$periode[1]))   # début de la période
+a1       <- reactive(as.integer(input$periode[2]))   # fin de la période
+an_choc  <- reactive(as.integer(input$annee_choc))
+
+# 2. Libellé de la rubrique choisie -------------------------------------------
+lib_rub <- reactive({
+  RUBRIQUES %>% filter(code == input$rubrique) %>% pull(libelle_standard) %>% first()
+})
+
+# 3. Série mensuelle de la rubrique (prise par son code : aucun double compte)
+serie <- reactive(serie_rubrique(B, input$rubrique))
+
+# 4. Cumuls de janvier au mois choisi : année N, année N-1 et objectif -------
+cumul <- reactive(calc_cumul(B, input$rubrique, an_sel(), mois_sel()))
+
+# 5. Taux de réalisation proratisé : cumul / (objectif annuel x mois / 12) --
+tr_prorata <- reactive(calc_tr_prorata(cumul(), mois_sel()))
+
+# 6. Données annuelles restreintes à la période choisie ----------------------
+an_periode <- reactive({
+  validate(need(a1() > a0(), "Choisir une période d'au moins deux années."))
+  AN %>% filter(between(annee, a0(), a1()))
+})
+
+# 7. Performance budgétaire annuelle de la rubrique choisie ------------------
+tr_rub <- reactive(calc_tr_rub(B, input$rubrique, input$seuil))
+
+# 8. Glissements annuels (GA) mensuels de X, Y, Z pour l'année de choc --------
+ga_mensuel <- reactive(calc_ga_mensuel(MO, an_choc()))
+
+# 9. Glissements annuels trimestriels (somme des 3 mois de chaque trimestre) --
+ga_trim <- reactive(calc_ga_trim(MO, an_choc()))
+
+# 10. Comportement des boutons et des menus ----------------------------------
+# a) « Réinitialiser » : remet chaque filtre à sa valeur de départ
+observeEvent(input$reinitialiser, {
+  updateSelectInput(session, "annee",      selected = max(ANNEES))
+  updateSelectInput(session, "mois",       selected = DERNIER_MOIS)
+  updateSelectInput(session, "rubrique",   selected = "RF")
+  updateSliderInput(session, "seuil",      value = 90)
+  updateSliderInput(session, "periode",    value = range(ANNEES))
+  updateSelectInput(session, "annee_choc", selected = 2020)
+})
+
+# b) Si l'exercice choisi n'est pas complet, le mois est ramené au dernier
+#    mois disponible (ex. exercice en cours publié jusqu'en juin).
+observeEvent(input$annee, {
+  dernier <- B$real %>% filter(annee == an_sel()) %>% pull(mois) %>% max()
+  if (mois_sel() > dernier) updateSelectInput(session, "mois", selected = dernier)
+})
+
+# c) Contenu de l'export Excel de la synthèse (bouton vert du ruban) :
+#    une feuille par tableau, mise en forme en « tableau Excel ».
+exporter_synthese <- function(file) {
+    classeur <- createWorkbook()
+    feuilles <- list(
+      Annuel        = AN %>% mutate(across(-annee, ~ round(.x, 2))),
+      Mensuel       = MO %>% mutate(across(-c(annee, mois), ~ round(.x, 2))),
+      Contributions = contributions(AN) %>%
+                        mutate(contribution = round(contribution, 3)) %>%
+                        pivot_wider(names_from = annee, values_from = contribution),
+      Rubrique      = tr_rub() %>% select(-statut),
+      Choc_trim     = ga_trim() %>% mutate(GA = round(GA, 2))
+    )
+    for (nom in names(feuilles)) {
+      addWorksheet(classeur, nom)
+      writeDataTable(classeur, nom, feuilles[[nom]], tableStyle = "TableStyleMedium2")
+    }
+    saveWorkbook(classeur, file, overwrite = TRUE)
+}
+```
+
+```{r ia-et-exports, include=FALSE}
+# -----------------------------------------------------------------------
+# RÔLE DU CHUNK : partie SERVEUR des commentaires IA et des exports
+#                 Word / PowerPoint / PDF.
+# -----------------------------------------------------------------------
+
+# 1. Filtres actifs, regroupés dans une liste ---------------------------------
+#    (si la période ne contient qu'une année, on reprend toute la période)
+filtres <- reactive({
+  f <- list(annee = an_sel(), mois = mois_sel(), rubrique = input$rubrique,
+            seuil = input$seuil, a0 = a0(), a1 = a1(), annee_choc = an_choc())
+  if (f$a1 <= f$a0) { f$a0 <- min(ANNEES); f$a1 <- max(ANNEES) }
+  f
+})
+
+# 2. Contenu complet du rapport pour ces filtres : chiffres clés, graphiques,
+#    tableaux et « faits » chiffrés des quatre sections (R/donnees_rapport.R)
+rapport <- reactive(preparer_rapport(B, AN, MO, filtres()))
+
+# 3. Commentaires déjà générés : une case par section ------------------------
+#    Chaque commentaire garde la « signature » des filtres pour lesquels il a
+#    été rédigé : si les filtres changent, il est signalé comme périmé.
+commentaires <- reactiveValues(vue = NULL, structure = NULL, budget = NULL, choc = NULL)
+
+commentaire_a_jour <- function(section, f) {
+  com <- commentaires[[section]]
+  !is.null(com) && identical(com$signature, signature_filtres(f, section))
+}
+
+# 4. Boutons « Générer l'analyse » et affichage du texte ----------------------
+#    La même logique est répétée pour les quatre sections grâce à lapply().
+lapply(names(SECTIONS_LIB), function(section) {
+
+  # a) Clic sur le bouton : appel de l'IA (ou des règles de secours)
+  observeEvent(input[[paste0("ia_", section)]], {
+    withProgress(message = "Rédaction du commentaire d'analyse…", value = 0.6, {
+      commentaires[[section]] <- generer_commentaire(section, rapport(), utiliser_ia = TRUE)
+    })
+  })
+
+  # b) Affichage du commentaire sous le bouton
+  output[[paste0("txt_ia_", section)]] <- renderUI({
+    com <- commentaires[[section]]
+    if (is.null(com)) {
+      return(p(class = "ia-vide", "Aucun commentaire pour l'instant. Cliquez sur le bouton pour faire ",
+               "analyser par l'IA les chiffres affichés avec les filtres actuels."))
+    }
+    tagList(
+      if (!commentaire_a_jour(section, filtres()))
+        div(class = "ia-perime", icon("triangle-exclamation"),
+            " Les filtres ont changé depuis la rédaction. Cliquez sur le bouton pour actualiser."),
+      p(class = "ia-texte", com$texte),
+      p(class = "ia-source", mention_source(com), " Rédigé le ", format(com$heure, "%d/%m/%Y à %H:%M"), "."),
+      if (!is.null(com$note)) p(class = "ia-note", com$note)
+    )
+  })
+})
+
+# 5. Bouton « Générer les quatre commentaires » (page Rapport & exports) ------
+observeEvent(input$ia_tous, {
+  r <- rapport()
+  withProgress(message = "Rédaction des commentaires…", value = 0, {
+    for (section in names(SECTIONS_LIB)) {
+      incProgress(1 / length(SECTIONS_LIB), detail = SECTIONS_LIB[[section]])
+      commentaires[[section]] <- generer_commentaire(section, r, utiliser_ia = TRUE)
+    }
+  })
+})
+
+# 6. Commentaires à insérer dans un export -----------------------------------
+#    - commentaire déjà généré et encore à jour : il est repris tel quel ;
+#    - sinon : il est rédigé au moment de l'export (IA si la case est cochée
+#      et la clé disponible, règles automatiques dans le cas contraire).
+commentaires_pour_export <- function(r, sections) {
+  if (!isTRUE(input$exp_commentaires)) return(list())
+  resultat <- list()
+  for (section in sections) {
+    resultat[[section]] <- if (commentaire_a_jour(section, r$filtres)) {
+      commentaires[[section]]
+    } else {
+      generer_commentaire(section, r, utiliser_ia = isTRUE(input$exp_ia))
+    }
+  }
+  resultat
+}
+
+# 7. Fonction appelée par les boutons de téléchargement ----------------------
+#    format : "word", "pptx" ou "pdf" ; file : fichier temporaire fourni par Shiny
+lancer_export <- function(file, format) {
+  r <- rapport()
+  sections <- input$exp_sections
+  if (is.null(sections) || length(sections) == 0) sections <- names(SECTIONS_LIB)
+
+  message_attente <- showNotification("Génération du rapport en cours, cela prend quelques secondes.",
+                                      duration = NULL, type = "message")
+  on.exit(removeNotification(message_attente), add = TRUE)
+
+  com <- commentaires_pour_export(r, sections)
+
+  if (format == "word") {
+    exporter_word(file, r, com, sections)        # graphiques Microsoft natifs (mschart)
+  } else if (format == "pptx") {
+    exporter_pptx(file, r, com, sections)        # graphiques Microsoft natifs (mschart)
+  } else {
+    methode <- exporter_pdf(file, r, com, sections)   # ggplot2 + gabarit R Markdown
+    if (identical(methode, "secours"))
+      showNotification("LaTeX n'est pas installé ici : le PDF a été mis en page directement par R.",
+                       type = "message", duration = 6)
+  }
+}
+```
+
+
+Vue d'ensemble {data-icon="fa-gauge-high"}
+=======================================================================
+
+Ligne KPI {data-height=125}
+-----------------------------------------------------------------------
+
+### Cumul recouvré
+
+```{r kpi-cumul}
+# RÔLE : montant recouvré de janvier au mois choisi (rubrique choisie)
+renderValueBox({
+  valueBox(
+    value   = paste(fmt_n(cumul()$n), "Mds"),
+    caption = HTML(paste0("Cumul recouvré à fin ", MOIS_LONG[mois_sel()], " ", an_sel(),
+                          "<br><small>", lib_rub(), "</small>")),
+    icon    = "fa-coins",
+    color   = COUL_BOX[["navy"]]
+  )
+})
+```
+
+### Objectif annuel
+
+```{r kpi-objectif}
+# RÔLE : prévision annuelle (loi de finances ou loi de finances rectificative)
+renderValueBox({
+  c <- cumul()
+  valueBox(
+    value   = ou_tiret(c$objectif, paste(fmt_n(c$objectif), "Mds")),
+    caption = paste0("Objectif annuel ", an_sel(), " selon la ", sub(" \\(.*\\)$", "", c$type)),
+    icon    = "fa-bullseye",
+    color   = COUL_BOX[["bleu"]]
+  )
+})
+```
+
+### Taux de réalisation
+
+```{r kpi-tr}
+# RÔLE : taux de réalisation de l'objectif proratisé au mois choisi
+#        couleur : vert >= 100 % ; orange >= seuil ; rouge < seuil
+renderValueBox({
+  tr <- tr_prorata()
+  valueBox(
+    value   = ou_tiret(tr, paste(fmt_n(tr), "%")),
+    caption = paste0("Taux de réalisation de l'objectif proratisé à ", mois_sel(), "/12"),
+    icon    = "fa-percent",
+    color   = COUL_BOX[[statut_tr(tr, input$seuil)]]
+  )
+})
+```
+
+### Glissement annuel
+
+```{r kpi-ga}
+# RÔLE : évolution du cumul par rapport au même cumul de l'année précédente
+renderValueBox({
+  c  <- cumul()
+  ga <- if (is.na(c$n1) || c$n1 == 0) NA_real_ else (c$n / c$n1 - 1) * 100
+  valueBox(
+    value   = ou_tiret(ga, paste(fmt_p(ga), "%")),
+    caption = paste0("Glissement annuel du cumul, ", an_sel(), " par rapport à ", an_sel() - 1),
+    icon    = if (!is.na(ga) && ga < 0) "fa-arrow-trend-down" else "fa-arrow-trend-up",
+    color   = COUL_BOX[[statut_variation(ga)]]
+  )
+})
+```
+
+Ligne graphiques mensuels {data-height=400}
+-----------------------------------------------------------------------
+
+### Part de l'objectif annuel atteinte {data-width=260}
+
+```{r jauge}
+# RÔLE : jauge de la part de l'objectif annuel déjà recouvrée.
+# La zone verte commence à la part « attendue » (mois / 12) ;
+# la zone orange commence à : part attendue x seuil d'alerte.
+renderGauge({
+  c <- cumul()
+  attendu <- mois_sel() / 12 * 100                 # ex. fin juin -> 50 %
+  part    <- if (is.na(c$objectif)) 0 else round(c$n / c$objectif * 100, 1)
+  borne   <- max(120, ceiling(part))
+
+  gauge(part, min = 0, max = borne, symbol = "%",
+        label = if (is.na(c$objectif)) "Objectif non disponible" else paste0("attendu : ", round(attendu), " %"),
+        sectors = gaugeSectors(
+          success = c(attendu, borne),
+          warning = c(attendu * input$seuil / 100, attendu),
+          danger  = c(0, attendu * input$seuil / 100),
+          colors  = c(COUL[["vert"]], COUL[["orange"]], COUL[["rouge"]])
+        ))
+})
+```
+
+> Vert : rythme conforme à l'objectif ; orange : en dessous de la part attendue ; rouge : sous le seuil d'alerte.
+
+### Saisonnalité comparée : exercice N et N-1
+
+```{r g-saisonnalite}
+# RÔLE : comparer mois par mois l'exercice choisi (N) et le précédent (N-1).
+# La ligne verticale pointillée marque le mois de fin de cumul.
+renderPlotly({
+  donnees <- serie() %>% filter(annee %in% c(an_sel() - 1, an_sel()))
+
+  plot_ly() %>%
+    add_trace(data = donnees %>% filter(annee == an_sel() - 1),
+              x = ~mois, y = ~montant, type = "scatter", mode = "lines+markers",
+              name = as.character(an_sel() - 1),
+              line = list(color = COUL[["gris"]], dash = "dash", width = 2),
+              marker = list(color = COUL[["gris"]], size = 8),
+              hovertemplate = "%{y:,.1f} Mds<extra>%{fullData.name}</extra>") %>%
+    add_trace(data = donnees %>% filter(annee == an_sel()),
+              x = ~mois, y = ~montant, type = "scatter", mode = "lines+markers",
+              name = as.character(an_sel()),
+              line = list(color = COUL[["dgi"]], width = 3),
+              marker = list(color = COUL[["dgi"]], size = 9),
+              hovertemplate = "%{y:,.1f} Mds<extra>%{fullData.name}</extra>") %>%
+    style_tabord() %>%
+    layout(xaxis = list(tickvals = 1:12, ticktext = MOIS_LIB),
+           hovermode = "x unified",
+           shapes = list(list(type = "line", x0 = mois_sel(), x1 = mois_sel(),
+                              yref = "paper", y0 = 0, y1 = 1,
+                              line = list(color = COUL[["orange"]], dash = "dot", width = 1.5))))
+})
+```
+
+### Cumul N, N-1 et objectif proratisé
+
+```{r g-cumul}
+# RÔLE : suivre la trajectoire cumulée par rapport à la trajectoire « cible »
+#        (objectif annuel réparti uniformément sur 12 mois).
+renderPlotly({
+  donnees <- serie() %>%
+    filter(annee %in% c(an_sel() - 1, an_sel())) %>%
+    arrange(annee, mois) %>%
+    group_by(annee) %>%
+    mutate(cumul = cumsum(montant)) %>%      # cumul depuis janvier
+    ungroup()
+
+  graphique <- plot_ly() %>%
+    add_trace(data = donnees %>% filter(annee == an_sel() - 1),
+              x = ~mois, y = ~cumul, type = "scatter", mode = "lines",
+              name = as.character(an_sel() - 1),
+              line = list(color = COUL[["gris"]], dash = "dash", width = 2),
+              hovertemplate = "%{y:,.1f} Mds<extra>%{fullData.name}</extra>") %>%
+    add_trace(data = donnees %>% filter(annee == an_sel()),
+              x = ~mois, y = ~cumul, type = "scatter", mode = "lines+markers",
+              name = as.character(an_sel()),
+              line = list(color = COUL[["dgi"]], width = 3),
+              marker = list(color = COUL[["dgi"]], size = 7),
+              hovertemplate = "%{y:,.1f} Mds<extra>%{fullData.name}</extra>")
+
+  objectif <- cumul()$objectif
+  if (!is.na(objectif)) {
+    graphique <- graphique %>%
+      add_trace(x = 1:12, y = objectif * (1:12) / 12, type = "scatter", mode = "lines",
+                name = "Objectif proratisé",
+                line = list(color = COUL[["orange"]], dash = "dot", width = 2.5),
+                hovertemplate = "%{y:,.1f} Mds<extra>Objectif</extra>")
+  }
+
+  graphique %>%
+    style_tabord("Cumul (milliards de FCFA)") %>%
+    layout(xaxis = list(tickvals = c(1, 3, 6, 9, 12), ticktext = MOIS_LIB[c(1, 3, 6, 9, 12)]),
+           hovermode = "x unified")
+})
+```
+
+Ligne graphiques annuels {data-height=420}
+-----------------------------------------------------------------------
+
+### Évolution annuelle des recettes fiscales : Z = X (DGI) + Y (DGD) {data-width=600}
+
+```{r g-annuel}
+# RÔLE : niveaux annuels empilés de X et Y ; le total Z est affiché au-dessus.
+renderPlotly({
+  donnees <- AN %>%
+    select(annee, X, Y, Z) %>%
+    mutate(annee = factor(annee))
+
+  plot_ly(donnees, x = ~annee) %>%
+    add_bars(y = ~X, name = "X : impôts et taxes (DGI)",
+             marker = list(color = COUL[["dgi"]], line = list(color = "white", width = 1)),
+             hovertemplate = "%{y:,.1f} Mds<extra>DGI</extra>") %>%
+    add_bars(y = ~Y, name = "Y : recettes douanières (DGD)",
+             marker = list(color = COUL[["dgd"]], line = list(color = "white", width = 1)),
+             hovertemplate = "%{y:,.1f} Mds<extra>DGD</extra>") %>%
+    add_text(y = ~Z, text = ~fmt_n(Z, 0), textposition = "top center",
+             textfont = list(color = "#1F2933", size = 11),
+             showlegend = FALSE, hoverinfo = "skip") %>%
+    style_tabord() %>%
+    layout(barmode = "stack", bargap = 0.35)
+})
+```
+
+### Taux de croissance annuel de Z, en %
+
+```{r g-croissance}
+# RÔLE : croissance annuelle de Z ; vert = hausse, rouge = baisse.
+renderPlotly({
+  donnees <- AN %>%
+    arrange(annee) %>%
+    mutate(croissance = (Z / lag(Z) - 1) * 100,
+           couleur    = COUL[statut_variation(croissance)]) %>%
+    filter(!is.na(croissance))
+
+  plot_ly(donnees, x = ~factor(annee), y = ~croissance, type = "bar",
+          marker = list(color = ~couleur),
+          text = ~paste0(fmt_p(croissance), " %"), textposition = "outside",
+          hovertemplate = "%{x} : %{y:+.1f} %<extra></extra>") %>%
+    style_tabord("Taux de croissance (%)") %>%
+    layout(bargap = 0.4)
+})
+```
+
+
+Ligne commentaire vue {data-height=240}
+-----------------------------------------------------------------------
+
+### Commentaire d'analyse rédigé par IA : vue d'ensemble
+
+```{r ia-vue}
+# RÔLE : encart de commentaire dynamique. Un clic envoie à l'IA les chiffres
+#        de cette page (filtres actuels) ; le texte s'affiche sous le bouton.
+encart_ia("vue")
+```
+
+
+Structure & contributions {data-icon="fa-layer-group"}
+=======================================================================
+
+Ligne KPI structure {data-height=125}
+-----------------------------------------------------------------------
+
+### Hausse cumulée de Z
+
+```{r kpi-hausse}
+# RÔLE : variation totale de Z entre le début et la fin de la période
+renderValueBox({
+  d <- an_periode()
+  hausse <- (last(d$Z) / first(d$Z) - 1) * 100
+  valueBox(paste(fmt_p(hausse), "%"),
+           caption = paste0("Hausse des recettes fiscales de ", a0(), " à ", a1()),
+           icon = "fa-chart-line", color = COUL_BOX[[statut_variation(hausse)]])
+})
+```
+
+### TCAM de Z
+
+```{r kpi-tcam}
+# RÔLE : taux de croissance annuel moyen = (Z_fin / Z_début)^(1/n) - 1
+renderValueBox({
+  d <- an_periode()
+  taux <- tcam(last(d$Z), first(d$Z), a1() - a0()) * 100
+  valueBox(paste(fmt_p(taux), "%"),
+           caption = paste0("Taux de croissance annuel moyen sur ", a1() - a0(), " ans"),
+           icon = "fa-arrow-trend-up", color = COUL_BOX[["bleu"]])
+})
+```
+
+### Part de la DGI dans la hausse
+
+```{r kpi-part-dgi}
+# RÔLE : part de la hausse de Z expliquée par X (DGI)
+#        = contribution cumulée de X / croissance cumulée de Z
+renderValueBox({
+  contrib <- contribution_cumulee(AN, a0(), a1(), c("X", "Z"))
+  part_x  <- contrib$contribution[1] / contrib$contribution[2] * 100
+  valueBox(paste(fmt_n(part_x), "%"),
+           caption = paste0("Part de la DGI dans la hausse de Z de ", a0(), " à ", a1()),
+           icon = "fa-building-columns", color = COUL_BOX[["navy"]])
+})
+```
+
+### Poids moyen de la DGI
+
+```{r kpi-poids-dgi}
+# RÔLE : poids moyen de X dans Z sur la période (structure)
+renderValueBox({
+  poids <- an_periode() %>% summarise(p = mean(X / Z) * 100) %>% pull(p)
+  valueBox(paste(fmt_n(poids), "%"),
+           caption = paste0("Poids moyen de la DGI dans Z, contre ", fmt_n(100 - poids), " % pour la DGD"),
+           icon = "fa-chart-pie", color = COUL_BOX[["gris"]])
+})
+```
+
+Ligne structure {data-height=400}
+-----------------------------------------------------------------------
+
+### Structure des recettes fiscales, en % de Z
+
+```{r g-structure}
+# RÔLE : poids de X (DGI) et de Y (DGD) dans Z, année par année
+renderPlotly({
+  donnees <- an_periode() %>%
+    transmute(annee = factor(annee),
+              part_X = X / Z * 100,
+              part_Y = Y / Z * 100)
+
+  plot_ly(donnees, x = ~annee) %>%
+    add_bars(y = ~part_X, name = "X (DGI)", marker = list(color = COUL[["dgi"]]),
+             text = ~paste0(fmt_n(part_X), " %"), textposition = "inside", textangle = 0,
+             insidetextfont = list(color = "white", size = 11),
+             hovertemplate = "%{y:.1f} %<extra>DGI</extra>") %>%
+    add_bars(y = ~part_Y, name = "Y (DGD)", marker = list(color = COUL[["dgd"]]),
+             text = ~paste0(fmt_n(part_Y), " %"), textposition = "inside", textangle = 0,
+             insidetextfont = list(color = "#0B2540", size = 11),
+             hovertemplate = "%{y:.1f} %<extra>DGD</extra>") %>%
+    style_tabord("% de Z") %>%
+    layout(barmode = "stack", bargap = 0.3, yaxis = list(range = c(0, 100)))
+})
+```
+
+### Décomposition de 1er niveau de la croissance de Z, en points de %
+
+```{r g-niveau1}
+# RÔLE : contribution (pts) = (V_t - V_t-1) / Z_t-1 x 100
+#        La somme des contributions de X et Y donne la croissance de Z (losange).
+renderPlotly({
+  donnees <- contributions(AN, c("X", "Y", "Z")) %>%
+    filter(annee > a0(), annee <= a1()) %>%
+    pivot_wider(names_from = variable, values_from = contribution)
+
+  plot_ly(donnees, x = ~factor(annee)) %>%
+    add_bars(y = ~X, name = "Contribution de X (DGI)", marker = list(color = COUL[["dgi"]]),
+             hovertemplate = "%{y:+.2f} pt<extra>DGI</extra>") %>%
+    add_bars(y = ~Y, name = "Contribution de Y (DGD)", marker = list(color = COUL[["dgd"]]),
+             hovertemplate = "%{y:+.2f} pt<extra>DGD</extra>") %>%
+    add_trace(y = ~Z, name = "Croissance de Z (%)", type = "scatter", mode = "markers+text",
+              marker = list(color = COUL[["orange"]], symbol = "diamond", size = 13,
+                            line = list(color = "white", width = 1.5)),
+              text = ~fmt_p(Z), textposition = "middle right",
+              textfont = list(color = "#1F2933", size = 11),
+              hovertemplate = "%{y:+.1f} %<extra>Z</extra>") %>%
+    style_tabord("Points de pourcentage") %>%
+    layout(barmode = "relative", bargap = 0.4)
+})
+```
+
+Ligne niveau 2 {data-height=470}
+-----------------------------------------------------------------------
+
+### Décomposition de 2e niveau : contribution cumulée des sous-rubriques {data-width=620}
+
+```{r g-niveau2}
+# RÔLE : quelle sous-rubrique a le plus tiré la hausse de Z sur la période ?
+#        Barres triées de la plus faible à la plus forte contribution.
+renderPlotly({
+  validate(need(a1() > a0(), "Choisir une période d'au moins deux années."))
+
+  donnees <- contribution_cumulee(AN, a0(), a1(), c(SOUS_X, SOUS_Y)) %>%
+    mutate(libelle        = VAR_LIB[variable],
+           administration = if_else(startsWith(variable, "X"), "DGI", "DGD")) %>%
+    arrange(contribution) %>%
+    mutate(libelle = factor(libelle, levels = libelle))   # fige l'ordre de tri
+
+  plot_ly(donnees, x = ~contribution, y = ~libelle, color = ~administration,
+          colors = c(DGI = COUL[["dgi"]], DGD = COUL[["dgd"]]),
+          type = "bar", orientation = "h",
+          text = ~fmt_n(contribution, 2), textposition = "outside",
+          hovertemplate = "%{y} : %{x:+.2f} pt<extra></extra>") %>%
+    style_tabord("") %>%
+    layout(xaxis = list(title = paste0("Points de %, de ", a0(), " à ", a1()),
+                        showgrid = TRUE, gridcolor = "#E4E9F0",
+                        range = c(min(0, min(donnees$contribution) * 1.25),   # marge pour
+                                  max(0, max(donnees$contribution)) * 1.15)), # les étiquettes
+           margin = list(l = 10))
+})
+```
+
+### Tableau des contributions et part de la hausse
+
+```{r t-niveau2}
+# RÔLE : mêmes résultats sous forme de tableau exportable.
+#        Part de la hausse (%) = contribution / croissance cumulée de Z x 100
+renderDT({
+  validate(need(a1() > a0(), "Choisir une période d'au moins deux années."))
+
+  donnees <- contribution_cumulee(AN, a0(), a1(), c(SOUS_X, "X", SOUS_Y, "Y", "Z")) %>%
+    mutate(part = contribution / contribution[variable == "Z"] * 100,
+           Rubrique = case_when(variable == "X" ~ "Sous-total X (DGI)",
+                                variable == "Y" ~ "Sous-total Y (DGD)",
+                                TRUE ~ VAR_LIB[variable])) %>%
+    transmute(Rubrique,
+              `Contribution (pts)`    = round(contribution, 2),
+              `Part de la hausse (%)` = round(part, 1))
+
+  tableau_dt(donnees, lignes = 20, speciales = c(`Contribution (pts)` = 2)) %>%
+    formatStyle("Part de la hausse (%)",
+                background = styleColorBar(c(0, 100), "#CFE3F3"),
+                backgroundSize = "98% 70%", backgroundRepeat = "no-repeat",
+                backgroundPosition = "center") %>%
+    formatStyle("Rubrique", target = "row",
+                fontWeight = styleEqual(c("Sous-total X (DGI)", "Sous-total Y (DGD)",
+                                          "Recettes fiscales (Z)"), rep("bold", 3)))
+})
+```
+
+
+Ligne commentaire structure {data-height=240}
+-----------------------------------------------------------------------
+
+### Commentaire d'analyse rédigé par IA : structure et contributions
+
+```{r ia-structure}
+# RÔLE : encart de commentaire dynamique. Un clic envoie à l'IA les chiffres
+#        de cette page (filtres actuels) ; le texte s'affiche sous le bouton.
+encart_ia("structure")
+```
+
+
+Performance budgétaire {data-icon="fa-bullseye"}
+=======================================================================
+
+Ligne KPI budget {data-height=125}
+-----------------------------------------------------------------------
+
+### TR de l'exercice
+
+```{r kpi-tr-annuel}
+# RÔLE : taux de réalisation annuel (réalisation / prévision) de l'exercice choisi
+renderValueBox({
+  ligne <- tr_rub() %>% filter(annee == an_sel())
+  tr    <- if (nrow(ligne) == 1) ligne$TR else NA_real_
+  valueBox(ou_tiret(tr, paste(fmt_n(tr), "%")),
+           caption = paste0("Taux de réalisation annuel ", an_sel(), ", ", lib_rub()),
+           icon = "fa-flag-checkered", color = COUL_BOX[[statut_tr(tr, input$seuil)]])
+})
+```
+
+### TR moyen
+
+```{r kpi-tr-moyen}
+# RÔLE : moyenne des taux de réalisation sur toutes les années disponibles
+renderValueBox({
+  moyenne <- tr_rub() %>% summarise(m = mean(TR, na.rm = TRUE)) %>% pull(m)
+  moyenne <- if (is.nan(moyenne)) NA_real_ else moyenne
+  valueBox(ou_tiret(moyenne, paste(fmt_n(moyenne), "%")),
+           caption = paste0("Taux de réalisation moyen de ", min(ANNEES), " à ", max(ANNEES)),
+           icon = "fa-scale-balanced", color = COUL_BOX[["bleu"]])
+})
+```
+
+### Exercices au-dessus de l'objectif
+
+```{r kpi-nb-succes}
+# RÔLE : nombre d'exercices où la réalisation a atteint ou dépassé la prévision
+renderValueBox({
+  d <- tr_rub() %>% filter(!is.na(TR))
+  valueBox(paste0(sum(d$TR >= 100), " / ", nrow(d)),
+           caption = "Exercices avec un TR ≥ 100 %",
+           icon = "fa-trophy", color = COUL_BOX[["vert"]])
+})
+```
+
+### Exercices sous le seuil
+
+```{r kpi-nb-alerte}
+# RÔLE : nombre d'exercices en alerte (TR inférieur au seuil du ruban)
+renderValueBox({
+  d <- tr_rub() %>% filter(!is.na(TR))
+  nb <- sum(d$TR < input$seuil)
+  valueBox(paste0(nb, " / ", nrow(d)),
+           caption = paste0("Exercices sous le seuil d'alerte de ", input$seuil, " %"),
+           icon = "fa-triangle-exclamation",
+           color = if (nb > 0) COUL_BOX[["rouge"]] else COUL_BOX[["gris"]])
+})
+```
+
+Ligne budget {data-height=420}
+-----------------------------------------------------------------------
+
+### Taux de réalisation annuel, en %
+
+```{r g-tr}
+# RÔLE : TR annuel coloré selon le statut ; ligne noire = 100 % (objectif),
+#        ligne orange = seuil d'alerte choisi dans le ruban.
+renderPlotly({
+  donnees <- tr_rub() %>% filter(!is.na(TR))
+  validate(need(nrow(donnees) > 0, "Aucune prévision budgétaire pour cette rubrique."))
+
+  plot_ly(donnees, x = ~factor(annee), y = ~TR, type = "bar",
+          marker = list(color = ~unname(COUL[statut])),
+          text = ~paste0(fmt_n(TR), " %"), textposition = "outside",
+          hovertemplate = "%{x} : %{y:.1f} %<extra></extra>") %>%
+    style_tabord("Taux de réalisation (%)") %>%
+    layout(bargap = 0.4,
+           yaxis = list(range = c(0, max(120, max(donnees$TR) * 1.12))),
+           shapes = list(
+             list(type = "line", xref = "paper", x0 = 0, x1 = 1, y0 = 100, y1 = 100,
+                  line = list(color = "#1F2933", dash = "dash", width = 1.5)),
+             list(type = "line", xref = "paper", x0 = 0, x1 = 1,
+                  y0 = input$seuil, y1 = input$seuil,
+                  line = list(color = COUL[["orange"]], dash = "dot", width = 1.5))),
+           annotations = list(
+             list(xref = "paper", x = 1.01, y = 100, text = "Objectif", showarrow = FALSE,
+                  xanchor = "left", font = list(size = 11)),
+             list(xref = "paper", x = 1.01, y = input$seuil, text = "Seuil",
+                  showarrow = FALSE, xanchor = "left",
+                  font = list(size = 11, color = COUL[["orange"]]))),
+           margin = list(r = 70))
+})
+```
+
+### Prévisions et réalisations, en milliards de FCFA
+
+```{r g-prev-real}
+# RÔLE : comparer, pour chaque exercice, le montant prévu et le montant réalisé
+renderPlotly({
+  donnees <- tr_rub() %>% filter(!is.na(montant_prevu))
+  validate(need(nrow(donnees) > 0, "Aucune prévision budgétaire pour cette rubrique."))
+
+  plot_ly(donnees, x = ~factor(annee)) %>%
+    add_bars(y = ~montant_prevu, name = "Prévision (LF / LFR)",
+             marker = list(color = COUL[["orange"]]),
+             hovertemplate = "%{y:,.1f} Mds<extra>Prévision</extra>") %>%
+    add_bars(y = ~realisation, name = "Réalisation",
+             marker = list(color = COUL[["dgi"]]),
+             hovertemplate = "%{y:,.1f} Mds<extra>Réalisation</extra>") %>%
+    style_tabord() %>%
+    layout(barmode = "group", bargap = 0.3)
+})
+```
+
+Ligne tableau budget {data-height=380}
+-----------------------------------------------------------------------
+
+### Prévisions, réalisations et écarts de la rubrique sélectionnée
+
+```{r t-budget}
+# RÔLE : tableau détaillé ; la colonne TR est colorée selon le statut.
+renderDT({
+  donnees <- tr_rub() %>%
+    transmute(Exercice      = annee,
+              Référence     = type_reference,
+              `Prévision`   = round(montant_prevu, 1),
+              `Réalisation` = round(realisation, 1),
+              `Écart`       = round(ecart, 1),
+              `TR (%)`      = round(TR, 1),
+              `Mois connus` = nb_mois)
+
+  tableau_dt(donnees) %>%
+    formatStyle("TR (%)", color = "white", fontWeight = "bold",
+                backgroundColor = styleInterval(c(input$seuil, 100) - 1e-9,
+                                                unname(COUL[c("rouge", "orange", "vert")]))) %>%
+    formatStyle("Écart", color = styleInterval(0, unname(COUL[c("rouge", "vert")])))
+})
+```
+
+
+Ligne commentaire budget {data-height=240}
+-----------------------------------------------------------------------
+
+### Commentaire d'analyse rédigé par IA : performance budgétaire
+
+```{r ia-budget}
+# RÔLE : encart de commentaire dynamique. Un clic envoie à l'IA les chiffres
+#        de cette page (filtres actuels) ; le texte s'affiche sous le bouton.
+encart_ia("budget")
+```
+
+
+Choc conjoncturel {data-icon="fa-bolt"}
+=======================================================================
+
+Ligne KPI choc {data-height=125}
+-----------------------------------------------------------------------
+
+### Variation annuelle de Z
+
+```{r kpi-choc-annuel}
+# RÔLE : croissance annuelle de Z pour l'année de choc (totaux annuels publiés)
+renderValueBox({
+  a <- an_choc()
+  z <- AN %>% filter(annee %in% c(a - 1, a)) %>% arrange(annee) %>% pull(Z)
+  ga <- (z[2] / z[1] - 1) * 100
+  valueBox(paste(fmt_p(ga), "%"),
+           caption = paste0("Variation des recettes fiscales Z en ", a),
+           icon = "fa-bolt", color = COUL_BOX[[statut_variation(ga)]])
+})
+```
+
+### Trimestre le plus touché
+
+```{r kpi-choc-trim}
+# RÔLE : trimestre où le glissement annuel de Z est le plus faible
+renderValueBox({
+  pire <- ga_trim() %>% filter(variable == "Z") %>% slice_min(GA, n = 1)
+  valueBox(paste(fmt_p(pire$GA), "%"),
+           caption = paste0("Trimestre le plus touché : ", pire$trimestre, " ", an_choc(),
+                            " (glissement annuel de Z)"),
+           icon = "fa-triangle-exclamation", color = COUL_BOX[[statut_variation(pire$GA)]])
+})
+```
+
+### Mois le plus touché
+
+```{r kpi-choc-mois}
+# RÔLE : mois où le glissement annuel de Z est le plus faible
+renderValueBox({
+  pire <- ga_mensuel() %>% filter(variable == "Z") %>% slice_min(GA, n = 1)
+  valueBox(paste(fmt_p(pire$GA), "%"),
+           caption = paste0("Mois le plus touché : ", MOIS_LONG[pire$mois], " ", an_choc(),
+                            " (glissement annuel de Z)"),
+           icon = "fa-calendar-xmark", color = COUL_BOX[[statut_variation(pire$GA)]])
+})
+```
+
+### Rebond l'année suivante
+
+```{r kpi-choc-rebond}
+# RÔLE : croissance de Z l'année qui suit le choc (capacité de rebond)
+renderValueBox({
+  a <- an_choc()
+  z <- AN %>% filter(annee %in% c(a, a + 1)) %>% arrange(annee) %>% pull(Z)
+  rebond <- if (length(z) == 2) (z[2] / z[1] - 1) * 100 else NA_real_
+  valueBox(ou_tiret(rebond, paste(fmt_p(rebond), "%")),
+           caption = paste0("Rebond de Z en ", a + 1),
+           icon = "fa-arrow-rotate-right", color = COUL_BOX[[statut_variation(rebond)]])
+})
+```
+
+Ligne graphiques choc {data-height=420}
+-----------------------------------------------------------------------
+
+### Profil mensuel de la rubrique : années N-1, N et N+1
+
+```{r g-profil}
+# RÔLE : situer l'année de choc entre l'année d'avant et l'année d'après.
+#        La bande rouge signale le trimestre le plus touché (pour Z).
+renderPlotly({
+  a <- an_choc()
+  s <- serie()
+  styles <- tibble(annee   = c(a - 1, a, a + 1),
+                   couleur = COUL[c("gris", "rouge", "vert")],
+                   trait   = c("dash", "solid", "solid"))
+
+  pire <- ga_trim() %>% filter(variable == "Z") %>% slice_min(GA, n = 1)
+  t    <- as.integer(substr(pire$trimestre, 2, 2))      # "T2" -> 2
+
+  graphique <- plot_ly()
+  for (i in seq_len(nrow(styles))) {                    # une courbe par année
+    d <- s %>% filter(annee == styles$annee[i])
+    if (nrow(d) > 0) {
+      graphique <- graphique %>%
+        add_trace(data = d, x = ~mois, y = ~montant, type = "scatter", mode = "lines+markers",
+                  name = as.character(styles$annee[i]),
+                  line = list(color = styles$couleur[i], dash = styles$trait[i], width = 2.5),
+                  marker = list(color = styles$couleur[i], size = 7),
+                  hovertemplate = "%{y:,.1f} Mds<extra>%{fullData.name}</extra>")
+    }
+  }
+
+  graphique %>%
+    style_tabord() %>%
+    layout(xaxis = list(tickvals = 1:12, ticktext = MOIS_LIB),
+           hovermode = "x unified",
+           shapes = list(list(type = "rect", x0 = 3 * t - 2.5, x1 = 3 * t + 0.5,
+                              yref = "paper", y0 = 0, y1 = 1, layer = "below",
+                              fillcolor = COUL[["rouge"]], opacity = 0.08, line = list(width = 0))),
+           annotations = list(list(x = 3 * t - 1, yref = "paper", y = 1, showarrow = FALSE,
+                                   text = paste(pire$trimestre, "le plus touché"),
+                                   font = list(color = COUL[["rouge"]], size = 11))))
+})
+```
+
+### Glissements annuels mensuels de X, Y et Z, en %
+
+```{r g-ga-mensuel}
+# RÔLE : comparer chaque mois de l'année de choc au même mois de l'année d'avant
+renderPlotly({
+  donnees <- ga_mensuel() %>%
+    select(mois, variable, GA) %>%
+    pivot_wider(names_from = variable, values_from = GA)
+
+  plot_ly(donnees, x = ~mois) %>%
+    add_bars(y = ~X, name = "X (DGI)", marker = list(color = COUL[["dgi"]]),
+             hovertemplate = "%{y:+.1f} %<extra>DGI</extra>") %>%
+    add_bars(y = ~Y, name = "Y (DGD)", marker = list(color = COUL[["dgd"]]),
+             hovertemplate = "%{y:+.1f} %<extra>DGD</extra>") %>%
+    add_trace(y = ~Z, name = "Z (recettes fiscales)", type = "scatter", mode = "lines+markers",
+              line = list(color = COUL[["orange"]], width = 2.5),
+              marker = list(color = COUL[["orange"]], size = 8),
+              hovertemplate = "%{y:+.1f} %<extra>Z</extra>") %>%
+    style_tabord("Glissement annuel (%)") %>%
+    layout(barmode = "group", bargap = 0.25,
+           xaxis = list(tickvals = 1:12, ticktext = MOIS_LIB))
+})
+```
+
+Ligne tableau choc {data-height=360}
+-----------------------------------------------------------------------
+
+### Glissements annuels trimestriels et annuels en %, baisses en rouge et hausses en vert
+
+```{r t-choc}
+# RÔLE : tableau des glissements trimestriels (T1 à T4) et annuels
+renderDT({
+  a <- an_choc()
+
+  annuel <- AN %>%
+    filter(annee %in% c(a - 1, a)) %>%
+    select(annee, all_of(VARS_CHOC)) %>%
+    pivot_longer(-annee, names_to = "variable", values_to = "valeur") %>%
+    group_by(variable) %>%
+    summarise(`Année` = (valeur[annee == a] / valeur[annee == a - 1] - 1) * 100)
+
+  donnees <- ga_trim() %>%
+    select(variable, trimestre, GA) %>%
+    pivot_wider(names_from = trimestre, values_from = GA) %>%
+    left_join(annuel, by = "variable") %>%
+    mutate(variable = factor(variable, VARS_CHOC)) %>%
+    arrange(variable) %>%
+    mutate(Rubrique = VAR_LIB[as.character(variable)]) %>%
+    select(Rubrique, starts_with("T"), `Année`) %>%
+    mutate(across(-Rubrique, ~ round(.x, 1)))
+
+  colonnes <- setdiff(names(donnees), "Rubrique")
+  tableau_dt(donnees) %>%
+    formatStyle(colonnes, fontWeight = "bold",
+                color = styleInterval(0, unname(COUL[c("rouge", "vert")])),
+                backgroundColor = styleInterval(0, c("#FCE8E6", "#E6F4EA")))
+})
+```
+
+
+Ligne commentaire choc {data-height=240}
+-----------------------------------------------------------------------
+
+### Commentaire d'analyse rédigé par IA : choc conjoncturel
+
+```{r ia-choc}
+# RÔLE : encart de commentaire dynamique. Un clic envoie à l'IA les chiffres
+#        de cette page (filtres actuels) ; le texte s'affiche sous le bouton.
+encart_ia("choc")
+```
+
+
+Rapport & exports {data-icon="fa-file-export"}
+=======================================================================
+
+Ligne options {data-height=560}
+-----------------------------------------------------------------------
+
+### Contenu du rapport {data-width=380}
+
+```{r exp-options}
+# RÔLE : options communes aux trois formats d'export.
+checkboxGroupInput("exp_sections", "Sections à inclure",
+                   choices = setNames(names(SECTIONS_LIB), SECTIONS_LIB),
+                   selected = names(SECTIONS_LIB))
+checkboxInput("exp_commentaires", "Insérer un commentaire d'analyse par section", value = TRUE)
+checkboxInput("exp_ia", "Faire rédiger par l'IA les commentaires manquants ou périmés", value = TRUE)
+
+# État de la connexion à l'IA (clé détectée ou non)
+if (ia_disponible()) {
+  div(class = "etat-ia ok", icon("circle-check"), " IA disponible : clé Gemini détectée.")
+} else {
+  div(class = "etat-ia ko", icon("circle-info"),
+      " Clé GEMINI_API_KEY absente : les commentaires sont rédigés par règles automatiques.")
+}
+```
+
+### Télécharger le rapport
+
+```{r exp-boutons}
+# RÔLE : les trois boutons de téléchargement. Le rapport reprend les filtres
+#        du ruban latéral (exercice, mois, rubrique, seuil, période, choc).
+div(class = "zone-export",
+    p(strong("Word et PowerPoint : "), "graphiques Microsoft natifs (package mschart), ",
+      "modifiables par clic droit puis ", em("Modifier les données"), "."),
+    bouton_rapport("word", "Rapport Word (.docx)", "btn-word"),
+    bouton_rapport("pptx", "Présentation PowerPoint (.pptx)", "btn-pptx"),
+    p(strong("PDF : "), "graphiques ggplot2, mis en page avec LaTeX ou, à défaut, directement par R."),
+    bouton_rapport("pdf", "Rapport PDF (.pdf)", "btn-pdf"),
+    p(em("La génération prend quelques secondes, un peu plus si l'IA rédige les commentaires.")))
+```
+
+### Filtres repris dans le rapport {data-width=330}
+
+```{r exp-filtres}
+# RÔLE : rappel des filtres actifs, tels qu'ils figureront en page de garde
+renderTable(resume_filtres(rapport()$filtres), striped = TRUE, width = "100%", spacing = "s")
+```
+
+Ligne commentaires {data-height=560}
+-----------------------------------------------------------------------
+
+### Commentaires d'analyse qui seront insérés dans le rapport
+
+```{r exp-commentaires}
+# RÔLE : aperçu des quatre commentaires et de leur état (à jour, périmé, absent)
+actionButton("ia_tous", "Générer / actualiser les quatre commentaires",
+             icon = icon("wand-magic-sparkles"), class = "btn-ia")
+renderUI({
+  f <- filtres()
+  lapply(names(SECTIONS_LIB), function(section) {
+    com <- commentaires[[section]]
+    etat <- if (is.null(com)) "absent, il sera rédigé au moment de l'export"
+            else if (!commentaire_a_jour(section, f)) "périmé car les filtres ont changé, il sera rédigé à nouveau à l'export"
+            else paste0("à jour, ", if (identical(com$source, "IA")) "rédigé par IA" else "rédigé par règles")
+    div(style = "margin-top:10px;",
+        strong(SECTIONS_LIB[[section]]), span(class = "ia-source", paste0(" : ", etat)),
+        if (!is.null(com)) p(class = "ia-texte", style = "font-size:13px;", com$texte))
+  })
+})
+```
+
+
+Données {data-icon="fa-table"}
+=======================================================================
+
+Ligne données {data-height=980}
+-----------------------------------------------------------------------
+
+### Base longue par année, mois et rubrique, avec filtres par colonne et export CSV, Excel ou PDF
+
+```{r t-base}
+# RÔLE : consulter et exporter la base harmonisée complète.
+#        Les cases sous les en-têtes permettent de filtrer chaque colonne.
+renderDT({
+  donnees <- B$real %>%
+    left_join(B$ref %>% select(code, libelle_standard, type, niveau), by = "code") %>%
+    transmute(`Année` = annee, Mois = mois, Code = code,
+              Rubrique = libelle_standard, Type = type, Niveau = niveau,
+              `Libellé source` = libelle_source, Montant = round(montant, 3))
+
+  tableau_dt(donnees, lignes = 25, filtre = "top", dom = "Bfrtip", decimales = 3)
+})
+```
+
+
+Méthodologie {data-icon="fa-book"}
+=======================================================================
+
+Ligne notes {data-height=820}
+-----------------------------------------------------------------------
+
+### Définitions et règles de calcul, identiques à celles du rapport de stage
+
+<div class="methodo">
+
+#### Source et unités
+
+- **Source** : tableau M-7 « Situation des recouvrements des recettes » du TABORD, le Tableau de bord des finances publiques, pour les exercices 2018 à 2025.
+- **Unité** : milliards de FCFA. Les montants annuels sont les **totaux publiés** du M-7. Les montants mensuels sont les recouvrements de chaque mois.
+
+#### Variables d'étude
+
+- `Z = X + Y` : **recettes fiscales** hors impôt sur les sociétés pétrolières.
+- `X` : impôts et taxes gérés par la **DGI**, ventilés de X1, la TVA intérieure, à X7, les autres impôts et taxes.
+- `Y` : recettes douanières gérées par la **DGD**, ventilées de Y1, les droits de douane à l'importation, à Y6, les autres recettes douanières.
+- `X7` et `Y6` sont calculés par différence, ce qui garantit l'additivité exacte des sous-rubriques.
+
+#### Indicateurs
+
+- **Glissement annuel** en % = (valeur N / valeur N-1 - 1) × 100, calculé sur un même mois, un même trimestre ou un même cumul.
+- **TCAM** en % = [(V fin / V début)^(1/n) - 1] × 100, où n est le nombre d'années de la période.
+- **Contribution à la croissance** en points de % = (V t - V t-1) / Z t-1 × 100. La somme des contributions des sous-rubriques est égale à la croissance de Z. La décomposition se fait à deux niveaux : d'abord X et Y, puis leurs sous-rubriques.
+- **Part dans la hausse** en % = contribution cumulée de la rubrique / croissance cumulée de Z × 100.
+- **Taux de réalisation proratisé** en % = cumul recouvré / (objectif annuel × mois / 12) × 100.
+- **Taux de réalisation annuel** en % = réalisation annuelle / prévision de la loi de finances × 100.
+
+#### Code couleur
+
+- <span style="color:#1E8E3E;font-weight:bold;">Vert</span> : hausse ou taux de réalisation ≥ 100 %.
+- <span style="color:#E08A1E;font-weight:bold;">Orange</span> : objectif, cible ou taux de réalisation compris entre le seuil d'alerte et 100 %.
+- <span style="color:#D93025;font-weight:bold;">Rouge</span> : baisse ou taux de réalisation inférieur au seuil d'alerte.
+
+#### Commentaires rédigés par IA
+
+- Chaque encart « Commentaire d'analyse » envoie à l'IA Gemini, avec le package `ellmer`, uniquement les chiffres affichés pour les filtres choisis. La consigne lui interdit d'inventer un chiffre. Le texte doit être relu avant diffusion.
+- Si la clé API est absente ou si le service ne répond pas, un commentaire automatique est rédigé par règles à partir des mêmes chiffres.
+
+#### Exports du rapport
+
+- **Word et PowerPoint** : graphiques Microsoft natifs créés avec `mschart` et `officer`, modifiables dans Office.
+- **PDF** : graphiques `ggplot2` et gabarit R Markdown `rapports/rapport_pdf.Rmd`.
+- Les trois formats sont construits à partir du même contenu, préparé par la fonction `preparer_rapport()`. Ils reprennent donc les mêmes chiffres que l'écran.
+
+#### Mise à jour
+
+Toute mise à jour se fait dans le fichier Excel `data/Base_TABORD_harmonisee_2018_2025.xlsx` (voir LISEZ-MOI_Dashboard.txt, section 6) ; le code du tableau de bord ne change pas.
+
+</div>

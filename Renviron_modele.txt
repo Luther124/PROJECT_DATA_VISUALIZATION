@@ -1,0 +1,7 @@
+# Modèle du fichier .Renviron (clé de l'IA pour les commentaires dynamiques)
+# 1. Remplacer la valeur ci-dessous par votre clé (https://aistudio.google.com/apikey)
+# 2. Enregistrer ce fichier sous le nom  .Renviron  (dans le dossier de app.Rmd)
+# 3. Redémarrer R : Session > Restart R
+GEMINI_API_KEY=coller_la_cle_ici
+# Facultatif : imposer un modèle Gemini (sinon ellmer choisit le modèle par défaut)
+# GEMINI_MODEL=nom_du_modele

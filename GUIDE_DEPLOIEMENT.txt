@@ -1,0 +1,100 @@
+=====================================================================
+ GUIDE : LANCER, CONFIGURER L'IA ET DÉPLOYER LE DASHBOARD (app.Rmd)
+ Recettes fiscales · TABORD : Projet de Data Visualisation, ISSEA
+=====================================================================
+
+A. LANCER LE DASHBOARD SUR VOTRE ORDINATEUR
+---------------------------------------------------------------------
+ 1. Ouvrir RStudio, puis 00_installer_packages.R, cliquer sur « Source ».
+    (une seule fois ; installe aussi TinyTeX pour l'export PDF)
+ 2. Ouvrir app.Rmd, cliquer sur « Run Document ».
+ 3. Tester les trois boutons d'export (ruban de gauche ou page
+    « Rapport & exports ») AVANT de déployer.
+
+B. CONFIGURER LA CLÉ DE L'IA (GEMINI)
+---------------------------------------------------------------------
+ 1. Aller sur https://aistudio.google.com/apikey, se connecter avec un
+    compte Google, cliquer sur « Create API key », copier la clé.
+ 2. Dans RStudio : File > New File > Text File. Écrire UNE ligne :
+        GEMINI_API_KEY=coller_la_cle_ici
+    (pas de guillemets, pas d'espace autour du signe =)
+ 3. Enregistrer ce fichier dans le dossier Projet_TABORD, à côté de
+    app.Rmd, sous le nom exact :   .Renviron
+    (le nom commence par un point ; un modèle est fourni :
+     Renviron_modele.txt)
+ 4. Session > Restart R, puis relancer app.Rmd.
+ 5. Vérification : page « Rapport & exports », le bandeau vert
+    « IA disponible : clé Gemini détectée » doit apparaître.
+ Sans clé, tout fonctionne : les commentaires sont rédigés par des
+ règles automatiques (mention « sans IA » sous le texte).
+ Ne jamais envoyer .Renviron par e-mail ni le déposer sur GitHub.
+
+C. DÉPLOYER SUR POSIT CONNECT CLOUD (remplaçant de shinyapps.io)
+---------------------------------------------------------------------
+ shinyapps.io est en cours de migration vers Posit Connect Cloud
+ (https://connect.posit.cloud) : c'est sur cette plateforme que le
+ compte gratuit est créé. Il n'y a plus de « token » à copier.
+ 1. Dans RStudio, mettre rsconnect à jour :
+        install.packages("rsconnect")     puis Session > Restart R
+ 2. Ouvrir deployer.R.
+    Menu Session > Set Working Directory > To Source File Location.
+ 3. ÉTAPE 1 du script : exécuter  rsconnect::connectCloudUser()
+    Le navigateur s'ouvre : se connecter et autoriser RStudio.
+    (une seule fois par ordinateur)
+ 4. Exécuter le reste du script ligne par ligne (Ctrl + Entrée).
+    Le premier envoi dure 5 à 10 minutes.
+ 5. L'adresse du dashboard s'affiche à la fin : c'est le lien à
+    transmettre à l'enseignant. Vérifier dans la page du contenu que
+    l'accès est « Public » (bouton de partage).
+ 6. Ouvrir le lien dans une fenêtre de navigation privée et refaire les
+    tests : filtres, encart IA, exports Word, PowerPoint et PDF.
+ Clé de l'IA : elle est envoyée avec le fichier .Renviron. Autre
+ possibilité : page du contenu > Settings > Variables, ajouter la
+ variable secrète GEMINI_API_KEY.
+ Plan B : si Connect Cloud refuse ce type de document (R Markdown
+ interactif), utiliser l'option B de deployer.R : compte shinyapps.io,
+ service actif jusqu'à fin 2026 ; le reste du script est identique.
+ Offre gratuite Connect Cloud : 20 crédits d'utilisation par mois ; ne
+ pas laisser le dashboard ouvert inutilement avant l'évaluation.
+
+D. ÉVITER LES ERREURS D'ENVIRONNEMENT
+---------------------------------------------------------------------
+ - Toujours déployer avec deployer.R et non avec le bouton bleu
+   « Publish » : le script choisit les bons fichiers. Si app.R était
+   envoyé avec le reste, le serveur lancerait l'ancienne application.
+ - Ne pas écrire install.packages() ni setwd() dans app.Rmd : le
+   serveur installe seul les packages appelés par library().
+ - Chemins : uniquement des chemins relatifs (data/..., R/...), jamais
+   C:/Users/... Les noms de fichiers sont sensibles à la casse sur le
+   serveur (logo_MINFI.png n'est pas Logo_minfi.PNG).
+ - Fermer le fichier Excel avant de lancer ou de déployer.
+ - Mettre à jour les packages avant le premier envoi :
+   Tools > Check for Package Updates.
+ - Offre gratuite : 5 applications et 20 crédits d'utilisation par mois.
+   L'application s'endort sans visiteur et se réveille au clic (compter
+   20 à 30 secondes). Ne pas laisser le dashboard ouvert inutilement et
+   suivre la consommation dans Admin > Usage.
+
+E. SI QUELQUE CHOSE NE MARCHE PAS EN LIGNE
+---------------------------------------------------------------------
+ « An error has occurred » ou page grise
+     -> sur https://connect.posit.cloud, ouvrir le contenu puis l'onglet
+        « Logs ». La cause est écrite dans les dernières lignes.
+ « there is no package called ... » dans le journal
+     -> installer ce package sur votre ordinateur, vérifier que
+        library(nom) figure dans le chunk « global » de app.Rmd, redéployer.
+ Le commentaire indique « Appel à l'IA impossible »
+     -> clé absente ou erronée dans .Renviron, quota gratuit dépassé
+        (attendre une minute) ou modèle indisponible. Pour imposer un
+        modèle, ajouter dans .Renviron :  GEMINI_MODEL=nom_du_modele
+        (liste : ellmer::models_google_gemini()), puis redéployer.
+ Le PDF obtenu est la version simplifiée
+     -> LaTeX a échoué (message « LaTeX indisponible »). En local :
+        tinytex::install_tinytex(). Word et PowerPoint ne sont pas
+        concernés.
+ Les graphiques Word / PowerPoint ne se modifient pas
+     -> ouvrir le fichier dans Microsoft Office (pas dans l'aperçu du
+        navigateur), clic droit sur le graphique > Modifier les données.
+ Modifier le dashboard après déploiement
+     -> corriger app.Rmd, tester en local, relancer deployer.R : la même
+        adresse est mise à jour.

@@ -1,0 +1,67 @@
+=====================================================================
+ TABLEAU DE BORD DE SUIVI CONJONCTUREL DES RECETTES FISCALES (TABORD)
+ DJAMKENE SOUGNABE Luther - Projet de Data Visualisation, ISSEA
+=====================================================================
+
+1. LANCER LE TABLEAU DE BORD
+---------------------------------------------------------------------
+ 1. Décompresser le dossier.
+ 2. Ouvrir RStudio, puis le fichier app.Rmd (File > Open File).
+ 3. Cliquer sur le bouton « Run Document ».
+ Aucun package n'est à télécharger : ils sont fournis dans le dossier
+ « packages » et app.Rmd les charge automatiquement depuis ce dossier.
+ Version nécessaire : R 4.6 sous Windows (voir packages/VERSION_R.txt).
+ Le script 00_installer_packages.R permet, si on le souhaite, de copier
+ ces packages dans la bibliothèque de R, sans connexion internet.
+
+ Version en ligne du tableau de bord : voir 1_Lien_application.txt.
+
+
+2. CONTENU DU TABLEAU DE BORD
+---------------------------------------------------------------------
+ Vue d'ensemble            situation de l'exercice et évolution annuelle
+ Structure et contributions  poids de la DGI et de la DGD, origine de la
+                           croissance
+ Performance budgétaire    réalisations comparées aux prévisions
+ Choc conjoncturel         déroulement d'une année de rupture (2020)
+ Rapport et exports        rapport Word, PowerPoint et PDF selon les filtres
+ Données                   base complète, filtrable et exportable
+ Méthodologie              définitions et règles de calcul
+ Le ruban de gauche contient les filtres et le bouton « Télécharger le
+ rapport de stage (PDF) », qui donne le rapport de stage complet.
+
+
+3. ORGANISATION DU CODE
+---------------------------------------------------------------------
+ app.Rmd                      tableau de bord (flexdashboard, runtime shiny)
+ R/fonctions.R                lecture de la base, variables Z, X, Y et
+                              leurs sous-rubriques, contributions, TCAM
+ R/donnees_rapport.R          calcul des indicateurs et contenu du rapport
+ R/commentaires_ia.R          commentaires automatiques (API Gemini, avec
+                              un commentaire de secours sans API)
+ R/exports_office.R           exports Word et PowerPoint (graphiques natifs)
+ R/export_pdf.R               export PDF
+ rapports/rapport_pdf.Rmd     gabarit du PDF
+ data/                        base harmonisée du TABORD (Excel)
+ packages/                    packages R nécessaires
+ rapport_stage_DJAMKENE.pdf   rapport de stage complet
+ 00_installer_packages.R      installation des packages depuis packages/
+ 01_copier_packages.R         préparation du dossier packages/
+ deployer.R                   mise en ligne sur Posit Connect Cloud
+ .Renviron                    clé de l'API utilisée par les commentaires
+
+ Ordre de lecture conseillé : app.Rmd, puis les fichiers du dossier R
+ dans l'ordre ci-dessus. Chaque fichier commence par un en-tête qui
+ explique son rôle, et chaque bloc de app.Rmd par un commentaire RÔLE.
+
+
+4. FONCTIONNEMENT
+---------------------------------------------------------------------
+ - La base Excel est lue une seule fois au démarrage (chunk « global »).
+ - Les six filtres du ruban (exercice, mois, rubrique, seuil d'alerte,
+   période, année de choc) relancent les calculs à chaque changement.
+ - La fonction preparer_rapport() rassemble les chiffres clés, les
+   graphiques et les tableaux. L'écran et les trois exports utilisent ce
+   même contenu : les chiffres sont identiques partout.
+ - Sans clé d'API ou sans connexion internet, les commentaires sont
+   rédigés automatiquement par des règles de calcul.
